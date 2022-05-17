@@ -15,11 +15,11 @@ enum estados
     ESTADO_DISPENSER_VACIO,
     ESTADO_DISPENSER_LLENO,
     ESTADO_ESPERANDO,
-    ESTADO_CARGANDO_PLATO,
+    ESTADO_CARGANDO,
     ESTADO_INICIAL
 } estadoActual;
 
-// Eventos disponibles:
+// Definición de eventos disponibles del sistema embebido:
 enum eventos
 {
     EVENTO_LLENE_DISPENSER,
@@ -36,22 +36,24 @@ enum eventos
 #define ANGULO_MIN_PLATO 20
 #define ANGULO_MAX_PLATO 50
 #define ANGULO_MIN_DISPENSER 30
-#define COMPUERTA_ABIERTA 135
+#define COMPUERTA_ABIERTA 45
 #define COMPUERTA_CERRADA 0
 #define FLEX_MIN 767
 #define FLEX_MAX 964
-#define UMBRAL_TIEMPO 500
+#define UMBRAL_TIEMPO 1000
 #define SENSOR_DISPENSER 0
 #define SENSOR_PLATO 1
 #define SENSOR_PIR 2
+#define VALOR_INICIAL_SENSORES -1
+#define BAUDIOS_MONITOR_SERIAL 9600
 
 // Definición de variables globales:
 Servo servoMotor;
-int estado, comidaEnDispenser, anguloDispenser = 0, anguloPlato = 0;
+int estado, comidaEnDispenser;
 bool tiempoCumplido;
 long ultimoTiempoActual;
 
-// Estructura para sensores:
+// Definición de estructura para sensores:
 struct estSensor
 {
     int pin;
@@ -60,39 +62,67 @@ struct estSensor
 };
 estSensor sensores[CANTIDAD_SENSORES];
 
+// Declaración de las funciones a utilizar:
+int leerSensorFlex(int puerto);
+bool verificarEstadoSensorDispenser();
+bool verificarEstadoSensorPlato();
+bool verificarEstadoSensorPIR();
+bool verificarEstadoSensores();
+void generarEvento();
+void encenderLED();
+void apagarLED();
+void abrirCompuerta();
+void cerrarCompuerta();
+void maquinaEstadosAlimentadorMascotas();
+
+/*-----------------------------------------------------------------------------------------------------
+Función: iniciarSistema()
+Descripción: Esta función se ejecuta en el setup() de Arduino. Asigna los pines de la placa de desarrollo
+    para cada sensor y actuador. Inicializa el estado de la máquina de estados, el array de sensores y
+    las variables del temporizador por software.
+-----------------------------------------------------------------------------------------------------*/
 void iniciarSistema()
 {
 
-    pinMode(PIN_LED, OUTPUT); // Pin digital del LED
-    servoMotor.attach(PIN_SERVOMOTOR);
+    pinMode(PIN_LED, OUTPUT);          // Pin digital del LED.
+    servoMotor.attach(PIN_SERVOMOTOR); // Pin digital PWM del servomotor.
     servoMotor.write(COMPUERTA_CERRADA);
 
-    pinMode(PIN_SENSOR_PLATO, INPUT);     // Pin analógico del sensor flex
-    pinMode(PIN_SENSOR_DISPENSER, INPUT); // Pin analógico del sensor flex
-    pinMode(PIN_SENSOR_PIR, INPUT);       // Pin digital del sensor PIR
+    pinMode(PIN_SENSOR_PLATO, INPUT);     // Pin analógico del sensor flex.
+    pinMode(PIN_SENSOR_DISPENSER, INPUT); // Pin analógico del sensor flex.
+    pinMode(PIN_SENSOR_PIR, INPUT);       // Pin digital del sensor PIR.
 
-    estadoActual = ESTADO_INICIAL; // Se inicializa en el estado inicial
+    estadoActual = ESTADO_INICIAL;
 
     sensores[SENSOR_DISPENSER].pin = PIN_SENSOR_DISPENSER;
     sensores[SENSOR_PLATO].pin = PIN_SENSOR_PLATO;
     sensores[SENSOR_PIR].pin = PIN_SENSOR_PIR;
 
-    sensores[SENSOR_PLATO].valorPrevio = -1;
-    sensores[SENSOR_DISPENSER].valorPrevio = -1;
-    sensores[SENSOR_PIR].valorPrevio = -1;
+    sensores[SENSOR_PLATO].valorPrevio = VALOR_INICIAL_SENSORES; // Asigna un valor inicial al valor previo de los sensores para realizar la primera verificación.
+    sensores[SENSOR_DISPENSER].valorPrevio = VALOR_INICIAL_SENSORES;
+    sensores[SENSOR_PIR].valorPrevio = VALOR_INICIAL_SENSORES;
 
     tiempoCumplido = false;
     ultimoTiempoActual = millis();
 
-    Serial.begin(9600);
+    Serial.begin(BAUDIOS_MONITOR_SERIAL); // Asigna el valor de baudios para el monitor serial.
 }
 
+/*-----------------------------------------------------------------------------------------------------
+Función: leerSensorFlex(int puerto)
+Descripción: Transforma el valor leído por el analogRead del sensor flex en un entero entre 0 y 255.
+-----------------------------------------------------------------------------------------------------*/
 int leerSensorFlex(int puerto)
 {
     int valor = map(analogRead(puerto), FLEX_MIN, FLEX_MAX, 0, 255);
     return valor;
 }
 
+/*-----------------------------------------------------------------------------------------------------
+Función: verificarEstadoSensorDispenser()
+Descripción: Se encargará de generar dos eventos según la lectura del sensor flex
+    del dispenser, asignagndo el nuevo evento a una variable global.
+-----------------------------------------------------------------------------------------------------*/
 bool verificarEstadoSensorDispenser()
 {
     sensores[SENSOR_DISPENSER].valorActual = leerSensorFlex(PIN_SENSOR_DISPENSER);
@@ -101,29 +131,29 @@ bool verificarEstadoSensorDispenser()
     int valorActual = sensores[SENSOR_DISPENSER].valorActual;
     int valorPrevio = sensores[SENSOR_DISPENSER].valorPrevio;
 
-    Serial.println("DISPENSER:");
-    Serial.println(sensores[SENSOR_DISPENSER].valorPrevio);
-    Serial.println(sensores[SENSOR_DISPENSER].valorActual);
+    sensores[SENSOR_DISPENSER].valorPrevio = valorActual;
 
-    if (valorActual != valorPrevio)
+    if (valorActual < ANGULO_MIN_DISPENSER)
     {
-        sensores[SENSOR_DISPENSER].valorPrevio = valorActual;
-
-        if (valorActual < ANGULO_MIN_DISPENSER)
-        {
-            nuevoEvento = EVENTO_VACIE_DISPENSER;
-        }
-        else
-        {
-            nuevoEvento = EVENTO_LLENE_DISPENSER;
-        }
-
+        nuevoEvento = EVENTO_VACIE_DISPENSER; // Se genera cuando el valor actual del sensor es menor al mínimo declarado.
+        return true;
+    }
+    else if (valorActual > valorPrevio)
+    {
+        nuevoEvento = EVENTO_LLENE_DISPENSER; // Se genera cuando el valor actual del sensor es mayor al valor previo.
         return true;
     }
 
     return false;
 }
 
+/*-----------------------------------------------------------------------------------------------------
+Función: verificarEstadoSensorPlato()
+Descripción: Se encargará de generar dos eventos según la lectura del sensor flex
+    del plato, asignando el nuevo evento a una variable global.
+    Si la cantidad actual de comida es igual a la cantidad previa, la función devolverá
+    falso, por lo que no genera un evento.
+-----------------------------------------------------------------------------------------------------*/
 bool verificarEstadoSensorPlato()
 {
     sensores[SENSOR_PLATO].valorActual = leerSensorFlex(PIN_SENSOR_PLATO);
@@ -131,138 +161,163 @@ bool verificarEstadoSensorPlato()
     int valorActual = sensores[SENSOR_PLATO].valorActual;
     int valorPrevio = sensores[SENSOR_PLATO].valorPrevio;
 
-    Serial.println("PLATO:");
-    Serial.println(sensores[SENSOR_PLATO].valorPrevio);
-    Serial.println(sensores[SENSOR_PLATO].valorActual);
+    sensores[SENSOR_PLATO].valorPrevio = valorActual;
 
-    if ((valorActual != valorPrevio) || (valorPrevio < ANGULO_MIN_PLATO))
+    if (valorActual == valorPrevio)
     {
-        sensores[SENSOR_PLATO].valorPrevio = valorActual;
-
-        if (valorActual < ANGULO_MIN_PLATO)
-        {
-            nuevoEvento = EVENTO_MASCOTA_COMIO_COMIDA;
-        }
-        else if ((valorActual >= ANGULO_MIN_PLATO) ||
-                 ((ANGULO_MAX_PLATO > comidaEnDispenser) && (comidaEnDispenser >= valorActual)))
-        {
-            nuevoEvento = EVENTO_CARGUE_PLATO;
-        }
-
+        return false;
+    }
+    else if (valorActual < ANGULO_MIN_PLATO)
+    {
+        nuevoEvento = EVENTO_MASCOTA_COMIO_COMIDA; // Se genera cuando el valor actual del sensor es menor al mínimo declarado.
+        return true;
+    }
+    else if ((valorActual >= ANGULO_MIN_PLATO) ||
+             ((comidaEnDispenser < ANGULO_MAX_PLATO) && (valorActual >= comidaEnDispenser)))
+    {
+        nuevoEvento = EVENTO_CARGUE_PLATO; // Se genera cuando el valor actual es mayor al mínimo del plato o a la sumatoria del restante de comida
+                                           // en el dispenser y la comida que había en el plato.
         return true;
     }
 
     return false;
 }
 
+/*-----------------------------------------------------------------------------------------------------
+Función: verificarEstadoSensorPIR()
+Descripción: Se encargará de generar dos eventos según la lectura del sensor PIR,
+    asignando el nuevo evento a una variable global.
+-----------------------------------------------------------------------------------------------------*/
 bool verificarEstadoSensorPIR()
 {
     sensores[SENSOR_PIR].valorActual = digitalRead(PIN_SENSOR_PIR);
 
     int valorActual = sensores[SENSOR_PIR].valorActual;
-    int valorPrevio = sensores[SENSOR_PIR].valorPrevio;
 
-    Serial.println("PIR:");
-    Serial.println(sensores[SENSOR_PIR].valorPrevio);
-    Serial.println(sensores[SENSOR_PIR].valorActual);
-
-    if ((valorActual != valorPrevio) || (valorPrevio == LOW))
+    if (valorActual == HIGH)
     {
-        sensores[SENSOR_PIR].valorPrevio = valorActual;
-
-        if ((valorActual == HIGH))
-        {
-            nuevoEvento = EVENTO_MASCOTA_PRESENTE;
-        }
-        else
-        {
-            nuevoEvento = EVENTO_MASCOTA_AUSENTE;
-        }
-
-        return true;
+        nuevoEvento = EVENTO_MASCOTA_PRESENTE; // Se genera cuando el sensor se encuentra en HIGH.
+    }
+    else
+    {
+        nuevoEvento = EVENTO_MASCOTA_AUSENTE; // Se genera cuando el sensor se encuentra en LOW.
     }
 
-    return false;
+    return true;
 }
 
+/*-----------------------------------------------------------------------------------------------------
+Función: verificarEstadoSensores()
+Descripción: Se encargará de generar los correspondientes eventos,
+    ejecutando las funciones que verifican el estado de cada uno de los sensores.
+-----------------------------------------------------------------------------------------------------*/
+bool verificarEstadoSensores()
+{
+
+    if (verificarEstadoSensorDispenser() == true || verificarEstadoSensorPlato() == true || verificarEstadoSensorPIR() == true)
+    {
+        return true;
+    }
+}
+
+/*-----------------------------------------------------------------------------------------------------
+Función: generarEvento()
+Descripción: Cuenta con una implementación de un temporizador por software.
+    Mientras el temporizador se encuentre activado se generarán enventos virtuales.
+    Una vez que el termporizador finalice, se guardará un nuevo tiempo actual y se llamará a la función
+    verificarEstadoSensores(). Ésta, de haberse registrado un nuevo evento, nos devolverá true.
+    Además, canaliza los nuevos eventos en una sola función.
+-----------------------------------------------------------------------------------------------------*/
 void generarEvento()
 {
     long tiempoActual = millis();
     int diferencia = (tiempoActual - ultimoTiempoActual);
     tiempoCumplido = (diferencia > UMBRAL_TIEMPO) ? (true) : (false);
 
-    if (tiempoCumplido)
+    if (tiempoCumplido) // Si se cumple el tiempo del temporizador por software, no hubo un nuevo evento.
     {
         tiempoCumplido = false;
         ultimoTiempoActual = tiempoActual;
 
-        if (verificarEstadoSensorDispenser() == true)
-        {
-            return;
-        }
-        else if (((estadoActual == ESTADO_CARGANDO_PLATO) || (estadoActual == ESTADO_DISPENSER_LLENO)) &&
-                 (verificarEstadoSensorPlato() == true))
-        {
-            return;
-        }
-        else if ((estadoActual == ESTADO_ESPERANDO) && (verificarEstadoSensorPIR() == true))
+        if (verificarEstadoSensores())
         {
             return;
         }
     }
 
-    nuevoEvento = EVENTO_VIRTUAL; // Se genera un evento "virtual"
+    nuevoEvento = EVENTO_VIRTUAL; // Se genera un evento virtual.
 }
 
+/*-----------------------------------------------------------------------------------------------------
+Función: encenderLED()
+Descripción: Utiliza la función digitalWrite para encender el LED.
+-----------------------------------------------------------------------------------------------------*/
 void encenderLED()
 {
     digitalWrite(PIN_LED, HIGH);
 }
 
+/*-----------------------------------------------------------------------------------------------------
+Función: apagarLED()
+Descripción: Utiliza la función digitalWrite para apagar el LED.
+-----------------------------------------------------------------------------------------------------*/
 void apagarLED()
 {
     digitalWrite(PIN_LED, LOW);
 }
 
+/*-----------------------------------------------------------------------------------------------------
+Función: abrirCompuerta()
+Descripción: Utiliza la función write propia del servomotor para abrir la compuerta inferior móvil
+    del dispenser, que deja caer la comida.
+-----------------------------------------------------------------------------------------------------*/
 void abrirCompuerta()
 {
     servoMotor.write(COMPUERTA_ABIERTA);
 }
 
+/*-----------------------------------------------------------------------------------------------------
+Función: cerrarCompuerta()
+Descripción: Utiliza la función write propia del servomotor para cerrar la compuerta inferior móvil
+    del dispenser.
+-----------------------------------------------------------------------------------------------------*/
 void cerrarCompuerta()
 {
     servoMotor.write(COMPUERTA_CERRADA);
 }
 
+/*-----------------------------------------------------------------------------------------------------
+Función: maquinaEstadosAlimentadorMascotas()
+Descripción: Esta función se ejecuta en el loop() de Arduino. Implementa el patrón de máquina de estados
+    a través de instrucciones condicionales: dos niveles de switch, uno para los estados y uno para los
+    eventos en cada estado. Muestra a través del monitor serial en cada nuevo evento el nombre del estado
+    anterior al evento y del evento.
+-----------------------------------------------------------------------------------------------------*/
 void maquinaEstadosAlimentadorMascotas()
 {
     generarEvento();
 
-    switch (estadoActual)
+    switch (estadoActual) // Según el estado actual, evalúa el nuevo evento.
     {
-        // Resolver esta función, utilizando un switch para los estados. Y para cada estado, un switch para cada evento en el que suceda algo.
-        // Ver el diagrama de estados. Me basé en esto: https://www.tinkercad.com/things/0V42IYweGGr-maquina-de-estado-potenciometro-climatizdor-
-
     case ESTADO_INICIAL:
     {
-        switch (nuevoEvento)
+        switch (nuevoEvento) // Según el nuevo evento, reacciona de determinada manera.
         {
-        case EVENTO_VIRTUAL:
+        case EVENTO_VIRTUAL: // Estado inicial, evento virtual: realiza la transición al estado dispenser lleno.
         {
             Serial.println("--------------------------------------------------");
             Serial.println("ESTADO_INICIAL");
             Serial.println("EVENTO_VIRTUAL");
             Serial.println("--------------------------------------------------");
 
-            estadoActual = ESTADO_DISPENSER_LLENO;
+            estadoActual = ESTADO_DISPENSER_VACIO;
         }
         break;
 
-        default:
+        default: // Estado inicial, cualquier otro evento: no realiza ninguna acción.
             Serial.println("--------------------------------------------------");
             Serial.println("ESTADO_INICIAL");
-            Serial.print("EVENTO_DESCONOCIDO: ");
-            Serial.println(nuevoEvento);
+            Serial.println("EVENTO_DESCONOCIDO");
             Serial.println("--------------------------------------------------");
             break;
         }
@@ -273,26 +328,13 @@ void maquinaEstadosAlimentadorMascotas()
     {
         switch (nuevoEvento)
         {
-        case EVENTO_VIRTUAL:
+        case EVENTO_VIRTUAL: // Estado dispenser lleno, evento virtual: realiza la transición al estado actual.
         {
             estadoActual = ESTADO_DISPENSER_LLENO;
         }
         break;
 
-        case EVENTO_VACIE_DISPENSER:
-        {
-            Serial.println("--------------------------------------------------");
-            Serial.println("ESTADO_DISPENSER_LLENO");
-            Serial.println("EVENTO_VACIE_DISPENSER");
-            Serial.println("--------------------------------------------------");
-
-            encenderLED();
-
-            estadoActual = ESTADO_DISPENSER_VACIO;
-        }
-        break;
-
-        case EVENTO_MASCOTA_COMIO_COMIDA:
+        case EVENTO_MASCOTA_COMIO_COMIDA: // Estado dispenser lleno, evento mascota comió comida: realiza transición al estado esperando.
         {
             Serial.println("--------------------------------------------------");
             Serial.println("ESTADO_DISPENSER_LLENO");
@@ -303,10 +345,10 @@ void maquinaEstadosAlimentadorMascotas()
         }
         break;
 
-        default:
+        default: // Estado dispenser lleno, cualquier otro evento: no realiza ninguna acción.
             Serial.println("--------------------------------------------------");
             Serial.println("ESTADO_DISPENSER_LLENO");
-            Serial.println("EVENTO_DESCONOCIDO: evento.nombre");
+            Serial.println("EVENTO_DESCONOCIDO");
             Serial.println("--------------------------------------------------");
             break;
         }
@@ -317,13 +359,13 @@ void maquinaEstadosAlimentadorMascotas()
     {
         switch (nuevoEvento)
         {
-        case EVENTO_VIRTUAL:
+        case EVENTO_VIRTUAL: // Estado dispenser vacío, evento virtual: realiza la transición al estado actual.
         {
             estadoActual = ESTADO_DISPENSER_VACIO;
         }
         break;
 
-        case EVENTO_LLENE_DISPENSER:
+        case EVENTO_LLENE_DISPENSER: // Estado dispenser vacío, evento llené dispenser: apaga el LED y realiza transición al estado dispenser lleno.
         {
             Serial.println("--------------------------------------------------");
             Serial.println("ESTADO_DISPENSER_VACIO");
@@ -336,10 +378,10 @@ void maquinaEstadosAlimentadorMascotas()
         }
         break;
 
-        default:
+        default: // Estado dispenser lleno, cualquier otro evento: no realiza ninguna acción.
             Serial.println("--------------------------------------------------");
             Serial.println("ESTADO_DISPENSER_VACIO");
-            Serial.println("EVENTO_DESCONOCIDO: evento.nombre");
+            Serial.println("EVENTO_DESCONOCIDO");
             Serial.println("--------------------------------------------------");
             break;
         }
@@ -350,13 +392,13 @@ void maquinaEstadosAlimentadorMascotas()
     {
         switch (nuevoEvento)
         {
-        case EVENTO_VIRTUAL:
+        case EVENTO_VIRTUAL: // Estado esperando, evento virtual: realiza la transición al estado actual.
         {
             estadoActual = ESTADO_ESPERANDO;
         }
         break;
 
-        case EVENTO_MASCOTA_PRESENTE:
+        case EVENTO_MASCOTA_PRESENTE: // Estado esperando, evento mascota presente: realiza la transición al estado actual.
         {
             Serial.println("--------------------------------------------------");
             Serial.println("ESTADO_ESPERANDO");
@@ -367,7 +409,7 @@ void maquinaEstadosAlimentadorMascotas()
         }
         break;
 
-        case EVENTO_MASCOTA_AUSENTE:
+        case EVENTO_MASCOTA_AUSENTE: // Estado esperando, evento mascota ausente: abre la compuerta inferior móvil del dispenser y realiza la transición al estado cargando.
         {
             Serial.println("--------------------------------------------------");
             Serial.println("ESTADO_ESPERANDO");
@@ -376,31 +418,31 @@ void maquinaEstadosAlimentadorMascotas()
 
             abrirCompuerta();
 
-            estadoActual = ESTADO_CARGANDO_PLATO;
+            estadoActual = ESTADO_CARGANDO;
         }
         break;
 
-        default:
+        default: // Estado esperando, cualquier otro evento: no realiza ninguna acción.
             Serial.println("--------------------------------------------------");
             Serial.println("ESTADO_ESPERANDO");
-            Serial.println("EVENTO_DESCONOCIDO: evento.nombre");
+            Serial.println("EVENTO_DESCONOCIDO");
             Serial.println("--------------------------------------------------");
             break;
         }
         break;
     }
 
-    case ESTADO_CARGANDO_PLATO:
+    case ESTADO_CARGANDO:
     {
         switch (nuevoEvento)
         {
-        case EVENTO_VIRTUAL:
+        case EVENTO_VIRTUAL: // Estado cargando, evento virtual: realiza la transición al estado actual.
         {
-            estadoActual = ESTADO_CARGANDO_PLATO;
+            estadoActual = ESTADO_CARGANDO;
         }
         break;
 
-        case EVENTO_CARGUE_PLATO:
+        case EVENTO_CARGUE_PLATO: // Estado cargando, evento cargué plato: cierra la compuerta inferior móvil del dispenser y realiza la transición al estado dispenser lleno.
         {
             Serial.println("--------------------------------------------------");
             Serial.println("ESTADO_CARGANDO");
@@ -413,10 +455,25 @@ void maquinaEstadosAlimentadorMascotas()
         }
         break;
 
-        default:
+        case EVENTO_VACIE_DISPENSER: // Estado cargando, evento vacié dispenser: enciende el LED y realiza transición al estado dispenser vacío.
+        {
+            Serial.println("--------------------------------------------------");
+            Serial.println("ESTADO_DISPENSER_LLENO");
+            Serial.println("EVENTO_VACIE_DISPENSER");
+            Serial.println("--------------------------------------------------");
+
+            cerrarCompuerta();
+
+            encenderLED();
+
+            estadoActual = ESTADO_DISPENSER_VACIO;
+        }
+        break;
+
+        default: // Estado cargando, cualquier otro evento: no realiza ninguna acción.
             Serial.println("--------------------------------------------------");
             Serial.println("ESTADO_CARGANDO");
-            Serial.println("EVENTO_DESCONOCIDO: evento.nombre");
+            Serial.println("EVENTO_DESCONOCIDO");
             Serial.println("--------------------------------------------------");
             break;
         }
